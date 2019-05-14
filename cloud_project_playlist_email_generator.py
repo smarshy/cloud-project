@@ -6,22 +6,37 @@ from botocore.exceptions import ClientError
 
 def lambda_handler(event, context):
     #song_id_list - hardcoded for now, will be input from generated playlist
-    song_id_list = ["A123456", "Dfr4532", "ASK23456"]
-    #post_song_ids_to_queue(song_id_list)
-    #song_id_list = get_messages_from_queue()
-    song_list = retrieve_from_db(song_id_list)
-    # sendSesEmail(song_list, "vatsala.swaroop@gmail.com")
+    '''song_id_list = ['spotify:track:3BQHpFgAp4l80e1XslIjNI', 'spotify:track:6ORqU0bHbVCRjXm9AjyHyZ', 'spotify:track:4wzjNqjKAKDU82e8uMhzmr']
+    post_song_ids_to_queue(song_id_list)
+    '''
+    message = "No playlist to generate!"
+    
+    song_id_list, email = get_messages_from_queue()
+    
+    if song_id_list:
+        song_list = retrieve_from_db(song_id_list)
+        if email:
+            sendSesEmail(song_list, email)
+        message = "Email sent"
+    
+    
     
     return {
         'statusCode': 200,
-        'body': json.dumps('Hello from Lambda!')
+        'body': json.dumps(message)
     }
 
 def retrieve_from_db(song_id_list):
+    dynamodb = boto3.resource("dynamodb", region_name='us-east-1')
+    table = dynamodb.Table('final-project-songs')
     result = []
     for song in song_id_list:
+        print (song)
         response = table.get_item(Key={'SongID': song})
-        result.append(response["item"])
+        print (response)
+        if response:
+            result.append(response["Item"])
+    print (result)
     return result
     
 def post_song_ids_to_queue(s_id_list):
@@ -31,6 +46,10 @@ def post_song_ids_to_queue(s_id_list):
     response=queue.send_message(MessageBody='To be retrieved from dynamo', MessageAttributes={
     'song_id_list': {
         'StringValue': song_id_list,
+        'DataType': 'String'
+        },
+    'email': {
+        'StringValue': "vatsala.swaroop@gmail.com",
         'DataType': 'String'
         }
     },
@@ -52,24 +71,34 @@ def sendSesEmail(dynamo_result, email):
     client = boto3.client('ses',region_name=AWS_REGION)
     
     # The subject line for the email.
-    SUBJECT = "Amazon SES Test (SDK for Python)"
+    SUBJECT = "Music Ecosystem : Your Playlist is here!"
     
     # The email body for recipients with non-HTML email clients.
-    BODY_TEXT = ("Amazon SES Test (Python)\r\n"
-                 "Your Playlist "
+    BODY_TEXT = (""
                 )
                 
+    table_str = ""
+    if dynamo_result:
+        table_str = table_str + "<table style= \"background-color: #F6F6F6;\">" + "<tr style= \"background-color: #4CAF50;\"><th>Song Name</th><th>Artist</th><th>Duration (min)</th></tr>"
+        for song in dynamo_result:
+            table_str = table_str + "<tr>"
+            table_str = table_str + "<td>" + song['Name'] + "</td>"
+            table_str = table_str + "<td>" + song['Artist'] + "</td>" + "<td>" + str(song['Duration']) + "</td>"
+            table_str = table_str + "</tr>"
+        table_str = table_str + "</table>"
+    
+    print(table_str)
+                
     # The HTML body of the email.
-    BODY_HTML = """<html>
-    <head></head>
+    BODY_HTML = """<html><head>
+    <style>td,th {border: 1px solid #ddd;padding: 8px;
+    }th {color:white;
+    }</style>
+    </head>
     <body>
-      <h1>Amazon SES Test (SDK for Python)</h1>
-      <p>This email was sent with
-        <a href='https://aws.amazon.com/ses/'>Amazon SES</a> using the
-        <a href='https://aws.amazon.com/sdk-for-python/'>
-          AWS SDK for Python (Boto)</a>.</p>
-    </body>
-    </html>"""            
+      <h2>We have recommended the following songs for you!</h2>""" + "</br>"+table_str
+    """</body>
+    </html>"""
     
     # The character encoding for the email.
     CHARSET = "UTF-8"
@@ -115,7 +144,7 @@ def get_messages_from_queue():
     client = boto3.client('sqs')
     queue = sqs.get_queue_by_name(QueueName='cloud_project_song_id.fifo')
     
-    response = queue.receive_messages(MessageAttributeNames=['song_id_list'])
+    response = queue.receive_messages(MessageAttributeNames=['song_id_list', 'email'])
     print(response)
     
     receipt_handle = None
@@ -123,6 +152,7 @@ def get_messages_from_queue():
     
     for r in response:
         song_id_list = r.message_attributes.get('song_id_list').get('StringValue')
+        email = r.message_attributes.get('email').get('StringValue')
         receipt_handle = r.receipt_handle
     
     if receipt_handle != None:
@@ -130,8 +160,10 @@ def get_messages_from_queue():
             QueueUrl=queue_url,
             ReceiptHandle=receipt_handle
         )
-    
-    final_list = song_id_list.split()
+        
+    final_list = []
+    if song_id_list:
+        final_list = song_id_list.split()
     
     print("fetched_song_id_list", final_list)
-    return final_list
+    return final_list, email
